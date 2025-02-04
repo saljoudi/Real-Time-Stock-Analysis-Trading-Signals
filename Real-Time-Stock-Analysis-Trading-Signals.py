@@ -1,9 +1,3 @@
-#!/usr/bin/env python
-# coding: utf-8
-
-# In[2]:
-
-
 import dash
 from dash import dcc, html
 from dash.dependencies import Input, Output, State
@@ -18,47 +12,39 @@ import plotly.graph_objs as go
 from datetime import datetime
 import warnings
 
-# Ignore warnings from ta library
-warnings.filterwarnings("ignore")
+warnings.filterwarnings("ignore")  # Ignore warnings from TA library
 
-# -------------- Processing Function ----------------
 def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_short, adl_long, initial_investment=100000):
-    """
-    Processes the DataFrame df to compute trading signals and portfolio metrics.
-    Returns a dictionary with final portfolio stats, trade details, 
-    and the updated DataFrame including buy/sell columns.
-    """
-    # Calculate indicators
+    # ------------------ 1) Moving Averages ------------------
     df['SMA_Short'] = df['Close'].rolling(window=int(sma_short)).mean()
-    df['SMA_Long'] = df['Close'].rolling(window=int(sma_long)).mean()
+    df['SMA_Long']  = df['Close'].rolling(window=int(sma_long)).mean()
 
-    df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+    # ------------------ 2) RSI (Ensure 1D) ------------------
+    rsi_series = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
+    # Convert to a true 1D Series
+    rsi_series = rsi_series.squeeze()  # or rsi_series.iloc[:, 0] if it's DataFrame
+    df['RSI'] = pd.Series(rsi_series.values, index=df.index)  # or just df['RSI'] = rsi_series if it's already Series
 
-    # macd = ta.trend.MACD(df['Close'])
-    # df['MACD'] = macd.macd()
-    # df['MACD_Signal'] = macd.macd_signal()
-    # # Also store MACD histogram for plotting
-    # df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
-
+    # ------------------ 3) MACD (Ensure 1D) ------------------
     macd = ta.trend.MACD(df['Close'])
-    # Make sure each is 1D by calling `.squeeze()`
-    df['MACD'] = macd.macd().squeeze()
+    df['MACD']        = macd.macd().squeeze()
     df['MACD_Signal'] = macd.macd_signal().squeeze()
     df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
 
+    # ------------------ 4) ADL (Ensure 1D) ------------------
+    adl_series = ta.volume.AccDistIndexIndicator(df['High'], df['Low'], df['Close'], df['Volume']).acc_dist_index()
+    adl_series = adl_series.squeeze()
+    df['ADL'] = pd.Series(adl_series.values, index=df.index)
 
-    df['ADL'] = ta.volume.AccDistIndexIndicator(
-        df['High'], df['Low'], df['Close'], df['Volume']
-    ).acc_dist_index()
-
+    # ADL moving averages
     df['ADL_Short_SMA'] = df['ADL'].rolling(window=int(adl_short)).mean()
-    df['ADL_Long_SMA'] = df['ADL'].rolling(window=int(adl_long)).mean()
+    df['ADL_Long_SMA']  = df['ADL'].rolling(window=int(adl_long)).mean()
 
-    # Signal generation
+    # ------------------ 5) Trading Signals ------------------
     df['Signal'] = df.apply(
         lambda row: -1 if (
             row['Close'] >= row['SMA_Short'] and
-            row['SMA_Short'] > row['SMA_Long'] and
+            row['SMA_Short'] > row['SMA_Long']   and
             row['ADL_Short_SMA'] > row['ADL_Long_SMA'] and
             row['RSI'] >= int(rsi_threshold) and
             row['MACD'] > row['MACD_Signal']
@@ -71,7 +57,7 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
         axis=1
     )
 
-    # Initialize portfolio variables
+    # ------------------ 6) Backtest / Portfolio Logic ------------------
     position = 0
     cash = initial_investment
     portfolio_value = initial_investment
@@ -82,7 +68,6 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
     portfolio_values = []
     amount_invested = 0
 
-    # Iterate over rows to simulate trades
     for index, row in df.iterrows():
         if row['Signal'] == 1 and position == 0:
             # Buy
@@ -90,7 +75,7 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
             position = cash / buy_price
             amount_invested = cash
             cash = 0
-            trade_start = index  # store the exact buy time
+            trade_start = index
             number_of_trades += 1
 
         elif row['Signal'] == -1 and position > 0:
@@ -99,14 +84,11 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
             cash = position * sell_price
             profit = cash - amount_invested
             profit_percentage = ((sell_price - buy_price) / buy_price) * 100
-            
-            # Calculate minutes held (instead of days)
             minutes_held = (index - trade_start).total_seconds() / 60.0
 
-            # Append trade details
             trades.append({
-                'Buy Time': trade_start,  # Datetime of the buy
-                'Sell Time': index,       # Datetime of the sell
+                'Buy Time': trade_start,
+                'Sell Time': index,
                 'Buy Price': buy_price,
                 'Sell Price': sell_price,
                 'Minutes Held': minutes_held,
@@ -119,48 +101,39 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
             buy_price = None
             amount_invested = 0
 
-        # Update portfolio value each iteration
         portfolio_value = position * row['Close'] if position > 0 else cash
         portfolio_values.append(portfolio_value)
 
-    # Final calculations
     final_value = portfolio_values[-1] if portfolio_values else initial_investment
     total_return = final_value - initial_investment
     percentage_return = (total_return / initial_investment) * 100
 
-    # Sharpe ratio
-    portfolio_values_array = np.array(portfolio_values)
-    daily_returns = pd.Series(portfolio_values_array).pct_change().fillna(0)
-    if daily_returns.std() != 0:
-        sharpe_ratio = (daily_returns.mean() / daily_returns.std()) * np.sqrt(252)
-    else:
-        sharpe_ratio = 0
+    daily_returns = pd.Series(portfolio_values).pct_change().fillna(0)
+    sharpe_ratio = (daily_returns.mean() / daily_returns.std() * np.sqrt(252)) if daily_returns.std() != 0 else 0
 
-    # Win rate
     profitable_trades = [t for t in trades if t['Profit'] > 0]
     win_rate = len(profitable_trades) / number_of_trades if number_of_trades > 0 else 0
 
-    # Average minutes held
-    if number_of_trades > 0:
-        average_minutes_held = sum([t['Minutes Held'] for t in trades]) / number_of_trades
-    else:
-        average_minutes_held = 0
+    avg_minutes_held = sum([t['Minutes Held'] for t in trades]) / number_of_trades if number_of_trades > 0 else 0
 
-    # Mark buy/sell for plotting
-    df['Buy Signal'] = df['Signal'] == 1
+    df['Buy Signal']  = df['Signal'] == 1
     df['Sell Signal'] = df['Signal'] == -1
 
     return {
         'final_value': final_value,
         'percentage_return': percentage_return,
         'number_of_trades': number_of_trades,
-        'average_minutes_held': average_minutes_held,
+        'average_minutes_held': avg_minutes_held,
         'sharpe_ratio': sharpe_ratio,
         'win_rate': win_rate,
         'trades': trades,
         'portfolio_values': portfolio_values,
         'df': df
     }
+
+# ---- The rest of your Dash app / callback code goes here, using process_stock() just as before ----
+
+
 
 # -------------- Dash App ----------------
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.LUX])
