@@ -34,11 +34,18 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
 
     df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
 
+    # macd = ta.trend.MACD(df['Close'])
+    # df['MACD'] = macd.macd()
+    # df['MACD_Signal'] = macd.macd_signal()
+    # # Also store MACD histogram for plotting
+    # df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
+
     macd = ta.trend.MACD(df['Close'])
-    df['MACD'] = macd.macd()
-    df['MACD_Signal'] = macd.macd_signal()
-    # Also store MACD histogram for plotting
+    # Make sure each is 1D by calling `.squeeze()`
+    df['MACD'] = macd.macd().squeeze()
+    df['MACD_Signal'] = macd.macd_signal().squeeze()
     df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
+
 
     df['ADL'] = ta.volume.AccDistIndexIndicator(
         df['High'], df['Low'], df['Close'], df['Volume']
