@@ -1,9 +1,11 @@
+from yahooquery import Ticker
 import dash
 from dash import dcc, html, dash_table
 from dash.dependencies import Input, Output, State
 import dash_bootstrap_components as dbc
 
-import yfinance as yf
+# Remove yfinance since we now use yahooquery
+# import yfinance as yf
 import pandas as pd
 import numpy as np
 import ta
@@ -277,6 +279,18 @@ trading_analysis_layout = dbc.Row([
                     )
                 ], className="mb-3"),
                 html.Div([
+                    dbc.Label("Interval:", html_for='time-interval'),
+                    dcc.Dropdown(
+                        id='time-interval',
+                        options=[
+                            {'label': '1 Minute', 'value': '1m'},
+                            {'label': '2 Minutes', 'value': '2m'},
+                            {'label': '5 Minutes', 'value': '5m'},
+                        ],
+                        value='1m'
+                    )
+                ], className="mb-3"),
+                html.Div([
                     dbc.Label("SMA Short:", html_for='sma-short'),
                     dbc.Input(id='sma-short', type='number', value=7, min=1, debounce=True)
                 ], className="mb-3"),
@@ -347,6 +361,18 @@ optimization_layout = dbc.Row([
                         value='1d'
                     )
                 ], className="mb-3"),
+                html.Div([
+                    dbc.Label("Interval:", html_for='opt-interval'),
+                    dcc.Dropdown(
+                        id='opt-interval',
+                        options=[
+                            {'label': '1 Minute', 'value': '1m'},
+                            {'label': '2 Minutes', 'value': '2m'},
+                            {'label': '5 Minutes', 'value': '5m'},
+                        ],
+                        value='1m'
+                    )
+                ], className="mb-3"),
                 dbc.Button('Optimize Parameters', id='optimize-button', color='warning', className='w-100')
             ])
         ], className="mb-4"),
@@ -394,6 +420,7 @@ app.layout = dbc.Container(fluid=True, children=[
     [
         State('stock-symbol', 'value'),
         State('time-period', 'value'),
+        State('time-interval', 'value'),
         State('sma-short', 'value'),
         State('sma-long', 'value'),
         State('rsi-threshold', 'value'),
@@ -401,7 +428,7 @@ app.layout = dbc.Container(fluid=True, children=[
         State('adl-long', 'value')
     ]
 )
-def update_analysis(n_intervals, n_clicks, stock_symbol, time_period,
+def update_analysis(n_intervals, n_clicks, stock_symbol, time_period, time_interval,
                     sma_short, sma_long, rsi_threshold, adl_short, adl_long):
     ctx = dash.callback_context
     if not ctx.triggered:
@@ -409,11 +436,18 @@ def update_analysis(n_intervals, n_clicks, stock_symbol, time_period,
     try:
         if stock_symbol.isdigit():
             stock_symbol += '.SR'
-        df = yf.download(stock_symbol, period=time_period, interval='1m')
-        df.index = pd.to_datetime(df.index)
+        # Fetch data using yahooquery with the selected interval
+        ticker_obj = Ticker(stock_symbol)
+        df = ticker_obj.history(period=time_period, interval=time_interval).reset_index()
         if df.empty:
-            msg = f"No data found for {stock_symbol} over the last {time_period}."
+            msg = f"No data found for {stock_symbol} over the last {time_period} with interval {time_interval}."
             return dash.no_update, dash.no_update, dash.no_update, html.P(msg, className="text-danger"), ""
+        # Convert the 'date' column to datetime and set it as index
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
+        # Rename columns to match expected names
+        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+
         result = process_stock(df.copy(), stock_symbol, sma_short, sma_long, rsi_threshold, adl_short, adl_long)
         df = result['df']
 
@@ -522,24 +556,31 @@ def update_analysis(n_intervals, n_clicks, stock_symbol, time_period,
 # Callback for Parameter Optimization tab
 @app.callback(
     Output('optimization-results', 'children'),
-    Input('optimize-button', 'n_clicks'),
+    [
+        Input('optimize-button', 'n_clicks')
+    ],
     [
         State('opt-symbol', 'value'),
-        State('opt-time-period', 'value')
+        State('opt-time-period', 'value'),
+        State('opt-interval', 'value')
     ]
 )
-def optimize_parameters(n_clicks, opt_symbol, opt_time_period):
+def optimize_parameters(n_clicks, opt_symbol, opt_time_period, opt_interval):
     if not n_clicks:
         return ""
     try:
         ticker = opt_symbol
         if ticker.isdigit():
             ticker += '.SR'
-        # Download data
-        df = yf.download(ticker, period=opt_time_period, interval='1m')
-        df.index = pd.to_datetime(df.index)
+        # Fetch data using yahooquery with the selected interval
+        ticker_obj = Ticker(ticker)
+        df = ticker_obj.history(period=opt_time_period, interval=opt_interval).reset_index()
         if df.empty:
-            return html.P(f"No data found for {ticker} over the last {opt_time_period}.", className="text-danger")
+            return html.P(f"No data found for {ticker} over the last {opt_time_period} with interval {opt_interval}.", className="text-danger")
+        df['date'] = pd.to_datetime(df['date'])
+        df.set_index('date', inplace=True)
+        df.rename(columns={'open': 'Open', 'high': 'High', 'low': 'Low', 'close': 'Close', 'volume': 'Volume'}, inplace=True)
+        
         # Precompute technical indicators (RSI, MACD, ADL)
         df['RSI'] = ta.momentum.RSIIndicator(df['Close'], window=14).rsi()
         macd = ta.trend.MACD(df['Close'])
