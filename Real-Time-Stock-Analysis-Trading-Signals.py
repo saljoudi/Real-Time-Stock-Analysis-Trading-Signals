@@ -54,7 +54,8 @@ def process_stock(df, stock_symbol, sma_short, sma_long, rsi_threshold, adl_shor
         ) else (
             1 if (
                 row['Close'] < row['SMA_Short'] and
-                row['SMA_Short'] < row['SMA_Long']
+                row['SMA_Short'] < row['SMA_Long'] and
+                row['MACD'] <= row['MACD_Signal']
             ) else 0
         ),
         axis=1
